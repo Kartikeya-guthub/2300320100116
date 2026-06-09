@@ -179,3 +179,53 @@ WHERE user_id = $1 AND is_read = FALSE;
 DELETE FROM notifications
 WHERE id = $1 AND user_id = $2;
 ```
+
+## Stage 3
+
+### Query Analysis
+
+```sql
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt DESC;
+```
+
+**Is it accurate?** Yes, logically correct. Returns unread notifications for a student in reverse chronological order.
+
+**Why is it slow?**
+- No index on `studentID` or `isRead` — full table scan on 5M rows
+- `SELECT *` fetches all columns unnecessarily
+- `ORDER BY createdAt DESC` requires sorting the entire result set
+
+---
+
+### Fix
+
+```sql
+CREATE INDEX idx_notifications_student_read ON notifications(studentID, isRead, createdAt DESC);
+
+SELECT id, title, message, notificationType, createdAt
+FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt DESC;
+```
+
+**Cost before:** O(N) full scan — 5M rows scanned  
+**Cost after:** O(log N + K) — index seek, K = matching rows only
+
+---
+
+### Indexing Every Column — Bad Idea
+
+No. Each index adds write overhead on every INSERT/UPDATE/DELETE. With 5M notifications and frequent writes, indexing every column will slow down writes significantly and waste storage. Only index columns used in WHERE, ORDER BY, or JOIN clauses.
+
+---
+
+### Placement Notifications — Last 7 Days
+
+```sql
+SELECT DISTINCT studentID
+FROM notifications
+WHERE notificationType = 'Placement'
+  AND createdAt >= NOW() - INTERVAL '7 days';
+```
