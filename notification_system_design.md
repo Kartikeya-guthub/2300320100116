@@ -256,6 +256,7 @@ Cache notification results in Redis on first fetch. Serve subsequent requests fr
 | **Pagination & Limits** | Prevents clients from fetching thousands of notifications at once. Fetches only 20 at a time per page. | **UX Tradeoff:** Users must click "Load More" or navigate to next pages. Doesn't solve the overload if all 50k students request page 1 simultaneously. |
 | **Server-Sent Events (SSE)** | Reduces polling. Instead of clients repeatedly polling the server every X seconds on page load, SSE keeps an open connection and pushes updates only when they occur. | **Resource Tradeoff:** High number of persistent open connections can consume server memory. Requires a load balancer configured for long-lived HTTP connections. |
 
+
 ## Stage 5
 
 ### Shortcomings in Current Implementation
@@ -324,3 +325,28 @@ function worker():
 | Message queue | Async, parallel, retryable | Adds infra (Redis/Kafka) |
 | Dead letter queue | Failed jobs captured, no silent loss | Needs manual review process |
 | DB first, email async | Consistent state regardless of email failure | Slight delay between DB save and email delivery |
+
+## Stage 6
+
+### Approach
+
+Each notification gets a **score** combining type weight and recency:
+
+- Placement = 3, Result = 2, Event = 1
+- Recency score = `1 / (1 + ageInMinutes)` — decays over time, never zero
+
+```
+score = typeWeight + recencyScore
+```
+
+### Maintaining Top N Efficiently (as new notifications arrive)
+
+Use a **min-heap of size N**. For each new notification:
+- If heap has < N items → push
+- If new score > heap minimum → replace root, re-heapify
+
+**Cost:** O(log N) per new notification vs O(N log N) if re-sorting the full list each time.
+
+### Files
+- `priorityInbox.js` — fetch from API, score, min-heap, print top 10
+- Run: `node priorityInbox.js`
