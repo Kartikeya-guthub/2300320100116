@@ -348,8 +348,8 @@ Use a **min-heap of size N**. For each new notification:
 **Cost:** O(log N) per new notification vs O(N log N) if re-sorting the full list each time.
 
 ### Files
-- `priorityInbox.js` — fetch from API, score, min-heap, print top 10
-- Run: `node priorityInbox.js`
+- `notification_app_be/priorityInbox.js` — fetch from API, score, min-heap, print top 10
+- Run: `cd notification_app_be` then `node priorityInbox.js`
 
 ### Output Screenshot
 ![Priority Inbox Output](./image.png)
