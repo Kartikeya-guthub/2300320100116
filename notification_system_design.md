@@ -255,3 +255,72 @@ Cache notification results in Redis on first fetch. Serve subsequent requests fr
 | **Redis Caching (Read-through)** | Offloads 90%+ of read requests from PostgreSQL to memory. Redis is highly optimized for fast key-value lookups, reducing latency from milliseconds to microseconds. | **Cache Invalidations:** When a notification is marked read or deleted, the cache must be purged or updated. **Cost:** Requires additional infrastructure (Redis). Stale data might occasionally be served if invalidation fails. |
 | **Pagination & Limits** | Prevents clients from fetching thousands of notifications at once. Fetches only 20 at a time per page. | **UX Tradeoff:** Users must click "Load More" or navigate to next pages. Doesn't solve the overload if all 50k students request page 1 simultaneously. |
 | **Server-Sent Events (SSE)** | Reduces polling. Instead of clients repeatedly polling the server every X seconds on page load, SSE keeps an open connection and pushes updates only when they occur. | **Resource Tradeoff:** High number of persistent open connections can consume server memory. Requires a load balancer configured for long-lived HTTP connections. |
+
+## Stage 5
+
+### Shortcomings in Current Implementation
+
+- **Synchronous loop** — 50,000 iterations blocking a single thread. Extremely slow.
+- **No error handling** — if `send_email` fails, loop continues with no retry or record of failure.
+- **Tight coupling** — email, DB insert, and SSE push happen sequentially. One failure affects the rest.
+- **No atomicity** — partial failures leave inconsistent state (email sent but DB not saved, or vice versa).
+
+---
+
+### Email Failed for 200 Students
+
+No way to identify which 200 failed. No retry mechanism. Those students simply don't get notified — silently.
+
+---
+
+### Should DB save and email happen together?
+
+No. They should be decoupled. DB insert is fast and local. Email depends on an external API that can fail, be slow, or rate-limit. Coupling them means an email failure rolls back or skips the DB record, leaving no trace of the notification.
+
+**Save to DB first, always. Email is a side effect.**
+
+---
+
+### Redesign: Message Queue
+
+Push all 50,000 jobs into a queue. Workers process them asynchronously in parallel. Failed jobs are retried automatically.
+
+---
+
+### Revised Pseudocode
+
+```
+function notify_all(student_ids: array, message: string):
+    for student_id in student_ids:
+        enqueue("notification_queue", {
+            student_id: student_id,
+            message: message,
+            status: "pending"
+        })
+
+# Worker (runs in parallel, multiple instances)
+function worker():
+    while true:
+        job = dequeue("notification_queue")
+
+        try:
+            save_to_db(job.student_id, job.message)
+            send_email(job.student_id, job.message)
+            push_to_app(job.student_id, job.message)
+            mark_job_done(job)
+        catch error:
+            if job.retries < 3:
+                re_enqueue(job with retries + 1)
+            else:
+                move_to_dead_letter_queue(job)
+```
+
+---
+
+### Tradeoffs
+
+| Approach | Benefit | Tradeoff |
+|----------|---------|----------|
+| Message queue | Async, parallel, retryable | Adds infra (Redis/Kafka) |
+| Dead letter queue | Failed jobs captured, no silent loss | Needs manual review process |
+| DB first, email async | Consistent state regardless of email failure | Slight delay between DB save and email delivery |
