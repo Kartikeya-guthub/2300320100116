@@ -350,3 +350,6 @@ Use a **min-heap of size N**. For each new notification:
 ### Files
 - `priorityInbox.js` — fetch from API, score, min-heap, print top 10
 - Run: `node priorityInbox.js`
+
+### Output Screenshot
+![Priority Inbox Output](./image.png)
