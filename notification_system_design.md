@@ -83,3 +83,99 @@ Server pushes event on new notification:
 ```
 data: {"id":"uuid","type":"placement","title":"string","createdAt":"ISO8601"}
 ```
+
+## Stage 2
+
+### Database Choice: PostgreSQL
+
+Notifications have a fixed schema, need filtering/sorting by userId, type, isRead — relational fits naturally. PostgreSQL also supports indexing well for the query patterns needed.
+
+---
+
+### Schema
+
+```sql
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  type VARCHAR(20) NOT NULL CHECK (type IN ('placement', 'event', 'result')),
+  title VARCHAR(255) NOT NULL,
+  message TEXT NOT NULL,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### Indexes
+
+```sql
+CREATE INDEX idx_notifications_user_id ON notifications(user_id);
+CREATE INDEX idx_notifications_user_unread ON notifications(user_id, is_read);
+CREATE INDEX idx_notifications_created_at ON notifications(created_at DESC);
+```
+
+---
+
+### Scalability Problems & Solutions
+
+| Problem | Solution |
+|--------|----------|
+| Table grows huge over time | Partition by `created_at` (monthly) |
+| Slow queries at scale | Indexes on `user_id`, `is_read` |
+| Too many reads on one DB | Read replicas |
+| Old notifications rarely accessed | Archive rows older than 90 days to cold storage |
+
+---
+
+### Queries (matching Stage 1 APIs)
+
+**GET /notifications**
+```sql
+SELECT * FROM notifications
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+```
+
+**GET /notifications?unread=true&type=placement**
+```sql
+SELECT * FROM notifications
+WHERE user_id = $1 AND is_read = FALSE AND type = $2
+ORDER BY created_at DESC
+LIMIT $3 OFFSET $4;
+```
+
+**GET /notifications/:id**
+```sql
+SELECT * FROM notifications
+WHERE id = $1 AND user_id = $2;
+```
+
+**POST /notifications**
+```sql
+INSERT INTO notifications (user_id, type, title, message)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+```
+
+**PATCH /notifications/:id/read**
+```sql
+UPDATE notifications
+SET is_read = TRUE
+WHERE id = $1 AND user_id = $2;
+```
+
+**PATCH /notifications/read-all**
+```sql
+UPDATE notifications
+SET is_read = TRUE
+WHERE user_id = $1 AND is_read = FALSE;
+```
+
+**DELETE /notifications/:id**
+```sql
+DELETE FROM notifications
+WHERE id = $1 AND user_id = $2;
+```
