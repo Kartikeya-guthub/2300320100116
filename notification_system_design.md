@@ -229,3 +229,29 @@ FROM notifications
 WHERE notificationType = 'Placement'
   AND createdAt >= NOW() - INTERVAL '7 days';
 ```
+
+## Stage 4
+
+### Problem
+Every page load hits the DB directly — 50,000 students fetching notifications causes read overload.
+
+---
+
+### Solution: Caching with Redis
+
+Cache notification results in Redis on first fetch. Serve subsequent requests from cache, not DB.
+
+**Flow:**
+1. Request comes in
+2. Check Redis — if hit, return cached result
+3. If miss, query DB, store result in Redis with TTL, return result
+
+---
+
+### Performance Improvements & Tradeoffs
+
+| Strategy | How it improves performance | Tradeoffs |
+|----------|-----------------------------|-----------|
+| **Redis Caching (Read-through)** | Offloads 90%+ of read requests from PostgreSQL to memory. Redis is highly optimized for fast key-value lookups, reducing latency from milliseconds to microseconds. | **Cache Invalidations:** When a notification is marked read or deleted, the cache must be purged or updated. **Cost:** Requires additional infrastructure (Redis). Stale data might occasionally be served if invalidation fails. |
+| **Pagination & Limits** | Prevents clients from fetching thousands of notifications at once. Fetches only 20 at a time per page. | **UX Tradeoff:** Users must click "Load More" or navigate to next pages. Doesn't solve the overload if all 50k students request page 1 simultaneously. |
+| **Server-Sent Events (SSE)** | Reduces polling. Instead of clients repeatedly polling the server every X seconds on page load, SSE keeps an open connection and pushes updates only when they occur. | **Resource Tradeoff:** High number of persistent open connections can consume server memory. Requires a load balancer configured for long-lived HTTP connections. |
